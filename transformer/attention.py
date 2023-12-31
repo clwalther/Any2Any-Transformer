@@ -1,8 +1,8 @@
 import tensorflow as tf
 
 class BaseAttention(tf.keras.layers.Layer):
-    def __init__(self, casual_mask=False):
-        super().__init__(**kwargs)
+    def __init__(self, casual_mask=False, **kwargs):
+        super().__init__()
         # Multi-Head attention block
         self.mulit_head_attention = tf.keras.layers.MultiHeadAttention(**kwargs)
 

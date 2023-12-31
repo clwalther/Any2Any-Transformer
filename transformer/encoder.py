@@ -5,7 +5,7 @@ from .feedforward import FeedForward
 
 class Encoder(tf.keras.layers.Layer):
     def __init__(self,*, num_layers, d_model, num_heads,
-                         dff, vocab_size, dropout_rate=0.1):
+                         dff, dropout_rate):
         super().__init__()
 
         self.d_model = d_model
@@ -14,7 +14,7 @@ class Encoder(tf.keras.layers.Layer):
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
         self.encoder_layers = [
-            EncoderLayers(
+            EncoderLayer(
                 d_model=d_model,
                 num_heads=num_heads,
                 dff=dff,
@@ -22,7 +22,11 @@ class Encoder(tf.keras.layers.Layer):
             )
         for encoder_layer_index in range(num_layers)]
 
+    def set_pre_layer(self, pre_layer):
+        self.pre_layer = pre_layer
+
     def call(self, x):
+        x = self.pre_layer(x)
         x = self.dropout(x)
 
         for encoder_layer_index in range(self.num_layers):
@@ -31,7 +35,7 @@ class Encoder(tf.keras.layers.Layer):
         return x
 
 class EncoderLayer(tf.keras.layers.Layer):
-    def __init__(self,*, d_model, num_heads, dff, dropout_rate=0.1):
+    def __init__(self,*, d_model, num_heads, dff, dropout_rate):
         super().__init__()
 
         self.self_attention = SelfAttention(
@@ -39,7 +43,7 @@ class EncoderLayer(tf.keras.layers.Layer):
             key_dim=d_model,
             dropout=dropout_rate
         )
-        self.feedforward = FeedForward(d_model, dff)
+        self.feedforward = FeedForward(d_model, dff, dropout_rate)
 
     def call(self, x):
         x = self.self_attention(x=x)

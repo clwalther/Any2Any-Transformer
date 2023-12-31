@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 class FeedForward(tf.keras.layers.Layer):
-    def __init__(self, d_model, dff, dropout_rate=0.1):
+    def __init__(self, d_model, dff, dropout_rate):
         super().__init__()
         # Feed Forward Network block
         self.network = tf.keras.Sequential([

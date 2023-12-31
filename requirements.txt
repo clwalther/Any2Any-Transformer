@@ -1,0 +1,4 @@
+tensorflow==2.15.0
+tensorflow-datasets==4.9.4
+tensorflow-text==2.15.0
+matplotlib==3.8.2

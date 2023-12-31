@@ -5,7 +5,7 @@ from .feedforward import FeedForward
 
 class Decoder(tf.keras.layers.Layer):
     def __init__(self,*, num_layers, d_model, num_heads,
-                         dff, vocab_size, dropout_rate=0.1):
+                         dff, dropout_rate):
         super().__init__()
 
         self.d_model = d_model
@@ -14,7 +14,7 @@ class Decoder(tf.keras.layers.Layer):
         self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
         self.decoder_layers = [
-            DecoderLayers(
+            DecoderLayer(
                 d_model=d_model,
                 num_heads=num_heads,
                 dff=dff,
@@ -22,16 +22,34 @@ class Decoder(tf.keras.layers.Layer):
             )
         for decoder_layer_index in range(self.num_layers)]
 
+    def set_pre_layer(self, pre_layer):
+        self.pre_layer = pre_layer
+
+    def set_post_layer(self, post_layer):
+        self.post_layer = post_layer
+
     def call(self, x, y):
+        x = self.pre_layer(x)
         x = self.dropout(x)
 
         for decoder_layer_index in range(self.num_layers):
             x = self.decoder_layers[decoder_layer_index](x, y)
 
+        # final linear layer output
+        x = self.post_layer(x)
+
+        try:
+            # Drop the keras mask, so it doesn't scale the losses/metrics.
+            # b/250038731
+            del x._keras_mask
+        except AttributeError:
+            pass
+
+        # Return the final output and the attention weights.
         return x
 
 class DecoderLayer(tf.keras.layers.Layer):
-    def __init__(self,*, d_model, num_heads, dff, dropout_rate=0.1):
+    def __init__(self,*, d_model, num_heads, dff, dropout_rate):
         super().__init__()
 
         self.self_attention = SelfAttention(
@@ -40,8 +58,12 @@ class DecoderLayer(tf.keras.layers.Layer):
             key_dim=d_model,
             dropout=dropout_rate
         )
-        self.cross_attention = CrossAttention()
-        self.feedforward = FeedForward(d_moderl, dff)
+        self.cross_attention = CrossAttention(
+            num_heads=num_heads,
+            key_dim=d_model,
+            dropout=dropout_rate
+        )
+        self.feedforward = FeedForward(d_model, dff, dropout_rate)
 
     def call(self, x, y):
         x = self.self_attention(x=x)

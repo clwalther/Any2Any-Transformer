@@ -1,29 +1,17 @@
 import tensorflow as tf
 
-from .decoder import Decoder
 from .encoder import Encoder
+from .decoder import Decoder
 
 class Transformer(tf.keras.Model):
-    def __init__(self, *, num_layers, d_model, num_heads, dff,
-                          input_vocab_size, target_vocab_size,
-                          dropout_rate=0.1):
+    def __init__(self):
         super().__init__()
 
-        self.encoder = Encoder(
-            d_model=d_model,
-            num_heads=num_heads,
-            dff=dff,
-            dropout_rate=dropout_rate
-        )
+    def set_encoder(self, encoder: Encoder):
+        self.encoder = encoder
 
-        self.decoder = Decoder(
-            d_model=d_model,
-            num_heads=num_heads,
-            dff=dff,
-            dropout_rate=dropout_rate
-        )
-
-        self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+    def set_decoder(self, decoder: Decoder):
+        self.decoder = decoder
 
     def call(self, inputs):
         y, x  = inputs
@@ -31,18 +19,7 @@ class Transformer(tf.keras.Model):
         y = self.encoder(y)
         x = self.decoder(x, y)
 
-        # Final linear layer output.
-        logits = self.final_layer(x)
-
-        try:
-            # Drop the keras mask, so it doesn't scale the losses/metrics.
-            # b/250038731
-            del logits._keras_mask
-        except AttributeError:
-            pass
-
-        # Return the final output and the attention weights.
-        return logits
+        return x
 
 def main():
     # tokenizers =
