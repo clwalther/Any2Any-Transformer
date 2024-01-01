@@ -10,9 +10,10 @@ import tensorflow as tf
 import tensorflow_text
 
 from transformer.__init__ import *
-from datahandling.__init__ import *
+from dataset.__init__ import *
+from training.__init__ import *
 
-# === TEMP ===
+# === PRE LAYERS (according to the transformer ressource) === #
 class PositionalEmbedding(tf.keras.layers.Layer):
     def __init__(self, vocab_size, d_model):
         super().__init__()
@@ -49,53 +50,137 @@ def positional_encoding(length, depth):
     )
 
     return tf.cast(pos_encoding, dtype=tf.float32)
-# ===  ===
+# ===   === #
+
+
+# === TRANSLATOR v1 === #
+class Translator(tf.Module):
+    def __init__(self, tokenizers, transformer):
+        self.tokenizers = tokenizers
+        self.transformer = transformer
+
+    def __call__(self, sentence, max_length):
+        # The input sentence is Portuguese, hence adding the `[START]` and `[END]` tokens.
+        assert isinstance(sentence, tf.Tensor)
+        if len(sentence.shape) == 0:
+            sentence = sentence[tf.newaxis]
+
+        sentence = self.tokenizers.pt.tokenize(sentence).to_tensor()
+
+        encoder_input = sentence
+
+        # As the output language is English, initialize the output with the
+        # English `[START]` token.
+        start_end = self.tokenizers.en.tokenize([''])[0]
+        start = start_end[0][tf.newaxis]
+        end = start_end[1][tf.newaxis]
+
+        # `tf.TensorArray` is required here (instead of a Python list), so that the
+        # dynamic-loop can be traced by `tf.function`.
+        output_array = tf.TensorArray(dtype=tf.int64, size=0, dynamic_size=True)
+        output_array = output_array.write(0, start)
+
+        for i in tf.range(max_length):
+            output = tf.transpose(output_array.stack())
+            predictions = self.transformer([encoder_input, output], training=False)
+
+            # Select the last token from the `seq_len` dimension.
+            predictions = predictions[:, -1:, :]  # Shape `(batch_size, 1, vocab_size)`.
+
+            predicted_id = tf.argmax(predictions, axis=-1)
+
+            # Concatenate the `predicted_id` to the output which is given to the
+            # decoder as its input.
+            output_array = output_array.write(i+1, predicted_id[0])
+
+            if predicted_id == end:
+                break
+
+        output = tf.transpose(output_array.stack())
+        # The output shape is `(1, tokens)`.
+        text = tokenizers.en.detokenize(output)[0]  # Shape: `()`.
+
+        tokens = tokenizers.en.lookup(output)[0]
+
+        # `tf.function` prevents us from using the attention_weights that were
+        # calculated on the last iteration of the loop.
+        # So, recalculate them outside the loop.
+        self.transformer([encoder_input, output[:,:-1]], training=False)
+        attention_weights = self.transformer.decoder.last_attn_scores
+
+        return text, tokens, attention_weights
+
+    def print_translation(self, sentence, tokens, ground_truth):
+        print(f'{"Input:":15s}: {sentence}')
+        print(f'{"Prediction":15s}: {tokens.numpy().decode("utf-8")}')
+        print(f'{"Ground truth":15s}: {ground_truth}')
+# ===   === #
 
 
 def main():
-    # hyperparams
-    num_layers = 4
-    d_model = 128
-    num_heads = 8
-    dff = 512
-    dropout_rate = 0.1
+    # dataset params
+    MAX_TOKENS      = 128
+    BATCH_SIZE      = 64
+    BUFFER_SIZE     = 20000
 
-    # aquire dataset
-    tokenizers, en, pt = load_dataset()
+    # hyperparams
+    NUM_LAYERS      = 4
+    D_MODEL         = 128
+    NUM_HEADS       = 8
+    DFF             = 512
+    DROPOUT_RATE    = 0.1
+
+    # optimizer
+    WARMUP_STEPS    = 4000
+    BETA_1          = 0.9
+    BETA_2          = 0.98
+    EPSILON         = 1e-9
+
+    # training params
+    EPOCHS          = 20
+
+    # aquire dataset pt - en
+    dataset = DatasetHandler(
+        dataset_name="ted_hrlr_translate/pt_to_en",
+        model_name="ted_hrlr_translate_pt_en_converter",
+        max_tokens=MAX_TOKENS,
+        batch_size=BATCH_SIZE,
+        buffer_size=BUFFER_SIZE
+    )
+    examples, metadata = dataset(batch_config=Default_PT_EN_BatchConfig)
 
     # setup encoder, decoder
     encoder = Encoder(
-        num_layers=num_layers,
-        d_model=d_model,
-        num_heads=num_heads,
-        dff=dff,
-        dropout_rate=dropout_rate
+        num_layers=NUM_LAYERS,
+        d_model=D_MODEL,
+        num_heads=NUM_HEADS,
+        dff=DFF,
+        dropout_rate=DROPOUT_RATE
     )
-
     decoder = Decoder(
-        num_layers=num_layers,
-        d_model=d_model,
-        num_heads=num_heads,
-        dff=dff,
-        dropout_rate=dropout_rate
+        num_layers=NUM_LAYERS,
+        d_model=D_MODEL,
+        num_heads=NUM_HEADS,
+        dff=DFF,
+        dropout_rate=DROPOUT_RATE
     )
 
     # config encoder, decoder
     encoder.set_pre_layer(
         pre_layer=PositionalEmbedding(
-            vocab_size=tokenizers.pt.get_vocab_size().numpy(),
-            d_model=d_model
+            vocab_size=dataset.tokenizer.pt.get_vocab_size().numpy(),
+            d_model=D_MODEL
         )
     )
     decoder.set_pre_layer(
         pre_layer=PositionalEmbedding(
-            vocab_size=tokenizers.en.get_vocab_size().numpy(),
-            d_model=d_model
+            vocab_size=dataset.tokenizer.en.get_vocab_size().numpy(),
+            d_model=D_MODEL
         )
     )
     decoder.set_post_layer(
         post_layer=tf.keras.layers.Dense(
-            tokenizers.en.get_vocab_size().numpy()
+            dataset.tokenizer.en.get_vocab_size().numpy()
         )
     )
 
@@ -105,16 +190,32 @@ def main():
     transformer.set_encoder(encoder=encoder)
     transformer.set_decoder(decoder=decoder)
 
-    # === VERIFICATION ===
-    print(en.shape)                     # >>> (64, 58)
-    print(pt.shape)                     # >>> (64, 62)
-    print(transformer((pt, en)).shape)  # >>> (64, 58, 7010)
+    # setup training params
+    optimizer = tf.keras.optimizers.Adam(
+        DefaultSchedule(
+            d_model=D_MODEL,
+            warmup_steps=WARMUP_STEPS
+        ),
+        beta_1=BETA_1,
+        beta_2=BETA_2,
+        epsilon=EPSILON
+    )
 
-    # (batch, heads, target_seq, input_seq)
-    print(transformer.decoder.decoder_layers[-1].cross_attention.last_scores.shape) # >>> (64, 8, 58, 62)
+    # training
+    transformer.compile(
+        loss=Loss.masked,
+        optimizer=optimizer,
+        metrics=[Accuarcy.masked]
+    )
+    transformer.fit(
+        dataset.make_batches(examples['train']),
+        epochs=EPOCHS,
+        validation_data=dataset.make_batches(examples['validation'])
+    )
 
-    # print model summary
-    transformer.summary()
+    # translator v1
+    translator = Translator(tokenizers, transformer)
+
 
 if __name__ == "__main__":
     main()

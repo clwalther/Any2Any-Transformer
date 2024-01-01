@@ -30,7 +30,7 @@ class Encoder(tf.keras.layers.Layer):
         x = self.dropout(x)
 
         for encoder_layer_index in range(self.num_layers):
-            x = self.decoder_layers[encoder_layer_index](x, y)
+            x = self.encoder_layers[encoder_layer_index](x)
 
         return x
 
@@ -50,31 +50,3 @@ class EncoderLayer(tf.keras.layers.Layer):
         x = self.feedforward(x=x)
 
         return x
-
-def main():
-    # en =
-    # pt =
-    # en_emb =
-    # pt_emb =
-
-    # === TESTING class: EncoderLayers ===
-    sample_encoder_layer = EncoderLayer(d_model=512, num_heads=8, dff=2048)
-
-    print(pt_emb.shape)                         # >>> (64, 62, 512)
-    print(sample_encoder_layer(pt_emb).shape)   # >>> (64, 62, 512)
-
-    # === TESTING class: Encoder ===
-    sample_encoder = Encoder(
-        num_layers=4,
-        d_model=512,
-        num_heads=8,
-        dff=2048,
-        vocab_size=8500
-    )
-
-    print(pt.shape)                                 # >>> (64, 62)
-    print(sample_encoder(pt, training=False).shape) # >>> (64, 62, 512)
-
-
-if __name__ == "__main__":
-    main()

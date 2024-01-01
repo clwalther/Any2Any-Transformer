@@ -71,36 +71,3 @@ class DecoderLayer(tf.keras.layers.Layer):
         x = self.feedforward(x=x)
 
         return x
-
-def main():
-    # en =
-    # pt =
-    # en_emb =
-    # pt_emb =
-
-    # === TESTING class: DecoderLayers ===
-    sample_decoder_layer = DecoderLayer(d_model=512, num_heads=8, dff=2048)
-
-    # print shapes
-    print(en_emb.shape)                                     # >>> (64, 58, 512)
-    print(pt_emb.shape)                                     # >>> (64, 62, 512)
-    print(sample_decoder_layer(x=en_emb, y=pt_emb).shape)   # >>> (64, 58, 512)
-
-    # === TESTING class: Decoder ===
-    sample_decoder = Decoder(
-        num_layers=4,
-        d_model=512,
-        num_heads=8,
-        dff=2048,
-        vocab_size=8000
-    )
-
-    print(en.shape)                             # >>> (64, 58)
-    print(pt_emb.shape)                         # >>> (64, 62, 512)
-    print(sample_decoder(x=en, y=pt_emb).shape) # >>> (64, 58, 512)
-
-    # (batch, heads, target_seq, input_seq)
-    print(sample_decoder.decoder_layers[-1].cross_attention.last_scores.shape) # >>> TensorShape([64, 8, 58, 62])
-
-if __name__ == "__main__":
-    main()

@@ -3,6 +3,8 @@ import tensorflow as tf
 class BaseAttention(tf.keras.layers.Layer):
     def __init__(self, casual_mask=False, **kwargs):
         super().__init__()
+        self.casual_mask = casual_mask
+
         # Multi-Head attention block
         self.mulit_head_attention = tf.keras.layers.MultiHeadAttention(**kwargs)
 
@@ -16,7 +18,7 @@ class SelfAttention(BaseAttention):
             query=x,
             value=x,
             key=x,
-            use_causal_mask=casual_mask
+            use_causal_mask=self.casual_mask
         )
 
         x = self.addition([x, output])
@@ -40,31 +42,3 @@ class CrossAttention(BaseAttention):
         x = self.normalization(x)
 
         return x
-
-def main():
-    # en =
-    # pt =
-    # en_emb =
-    # pt_emb =
-
-    # === TESTING class: SelfAttention (unmasked) ===
-    sample_self_attention = SelfAttention(num_heads=2, key_dim=512)
-
-    print(pt_emb.shape)                         # >>> (64, 62, 512)
-    print(sample_self_attention(pt_emb).shape)  # >>> (64, 62, 512)
-
-    # === TESTING class SelfAttention (masked) ===
-    sample_self_attention = SelfAttention(casual_mask=True, num_heads=2, key_dim=512)
-
-    print(pt_emb.shape)                         # >>> (64, 58, 512)
-    print(sample_self_attention(pt_emb).shape)  # >>> (64, 58, 512)
-
-    # === TESTING class: CrossAttention ===
-    sample_cross_attention = CrossAttention(num_heads=2, key_dim=512)
-
-    print(pt_emb.shape)                                 # >>> (64, 62, 512)
-    print(en_emb.shape)                                 # >>> (64, 58, 512)
-    print(sample_cross_attention(en_emb, pt_emb).shape) # >>> (64, 58, 512)
-
-if __name__ == "__main__":
-    main()
