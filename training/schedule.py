@@ -1,10 +1,4 @@
-import numpy as np
-import matplotlib.pyplot as plt
-
-import tensorflow_datasets as tfds
 import tensorflow as tf
-
-import tensorflow_text
 
 class DefaultSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps):

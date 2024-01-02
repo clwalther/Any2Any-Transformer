@@ -20,3 +20,15 @@ class Transformer(tf.keras.Model):
         x = self.decoder(x, y)
 
         return x
+
+    def info(self, build_example):
+        for (pt, en), en_labels in build_example:
+            break
+
+        # builds the transformer with input
+        self((pt, en))
+
+        # print model summary
+        print()
+        self.summary()
+        print()

@@ -1,6 +1,6 @@
 import tensorflow as tf
 
-from .attention import BaseAttention, SelfAttention, CrossAttention
+from .attention import SelfAttention
 from .feedforward import FeedForward
 
 class Encoder(tf.keras.layers.Layer):
