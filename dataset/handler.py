@@ -14,7 +14,7 @@ class DatasetHandler():
         # check whether model doesn't exists.
         if not tf.saved_model.contains_saved_model(export_dir=f"__models__/__datasets__/{self.model_name}"):
             # downloads the model
-            self.download_model()
+            self.__download_model()
 
         # loads model as tokenizer
         self.tokenizer = tf.saved_model.load(f"__models__/__datasets__/{self.model_name}")
@@ -35,7 +35,7 @@ class DatasetHandler():
             .prefetch(buffer_size=tf.data.AUTOTUNE)
         )
 
-    def download_model(self):
+    def __download_model(self):
         tf.keras.utils.get_file(
             f"{self.model_name}.zip",
             f"https://storage.googleapis.com/download.tensorflow.org/models/{self.model_name}.zip",

@@ -1,7 +1,9 @@
 import os
 import sys
+import time
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['MIN_LOG_LEVEL'] = '3'
 # 0 = all messages are logged (default behavior)
 # 1 = INFO messages are not printed
 # 2 = INFO and WARNING messages are not printed
@@ -14,16 +16,25 @@ PATH_TO_MODEL = None
 
 for arg_index in range(len(sys.argv)):
     match sys.argv[arg_index]:
-        case "-p":
+        # tensorflow debugging mode
+        case "-tf-d":
             os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
-        case "--print":
+        case "--tf-debug":
             os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
 
+        # debugging mode
+        case "-d":
+            os.environ['MIN_LOG_LEVEL'] = '0'
+        case "--debug":
+            os.environ['MIN_LOG_LEVEL'] = '0'
+
+        # trainging mode
         case "-t":
             TRAIN = True
         case "--train":
             TRAIN = True
 
+        # load element <arg[arg_index+1]>
         case "-l":
             arg_index += 1
             LOAD = True
@@ -59,7 +70,7 @@ class PositionalEmbedding(tf.keras.layers.Layer):
             d_model,
             mask_zero=True
         )
-        self.pos_encoding = self.positional_encoding(length=2048, depth=d_model)
+        self.pos_encoding = self.positional_encoding(length=2048)
 
     def compute_mask(self, *args, **kwargs):
         return self.embedding.compute_mask(*args, **kwargs)
@@ -68,16 +79,13 @@ class PositionalEmbedding(tf.keras.layers.Layer):
         x = self.embedding(x)
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         x += self.pos_encoding[tf.newaxis, :tf.shape(x)[1], :]
+
         return x
 
-    def positional_encoding(self, length, depth):
-        depth /= 2
-
-        positions = np.arange(length)[:, np.newaxis]     # (seq, 1)
-        depths = np.arange(depth)[np.newaxis, :]/depth   # (1, depth)
-
-        angle_rates = 1 / (10000**depths)         # (1, depth)
-        angle_rads = positions * angle_rates      # (pos, depth)
+    def positional_encoding(self, length):
+        depth = self.d_model / 2
+        depths = np.arange(depth)[np.newaxis, :] / depth
+        angle_rads = np.arange(length)[:, np.newaxis] / (10000**depths)
 
         pos_encoding = np.concatenate(
             [np.sin(angle_rads), np.cos(angle_rads)],
@@ -181,68 +189,58 @@ class Translation():
         self.tokens = self.__tokenizer.en.lookup(output)[0]
 
         # aquires attention weights
-        self.__transformer([sentence, output[:,:-1]], training=False)
+        self.__transformer([sentence, output[:,:-1]], active_encoder=0, active_decoder=0, training=False)
 
-        self.weights = self.__transformer.decoder.decoder_layers[-1].cross_attention.last_scores
+        self.weights = self.__transformer.decoders[0].decoder_layers[-1].cross_attention.last_scores
 # ===   === #
 
 
 
 def main():
-    # dataset params
+    # === PARAMS === #
+    ## dataset params
     MAX_TOKENS      = 128
     BATCH_SIZE      = 64
     BUFFER_SIZE     = 20000
 
-    # transformer hyperparams
+    ## transformer hyperparams
     NUM_LAYERS      = 4
     D_MODEL         = 128
     NUM_HEADS       = 8
     DFF             = 512
     DROPOUT_RATE    = 0.1
 
-    # optimizer
+    ## optimizer
     WARMUP_STEPS    = 4000
     BETA_1          = 0.9
     BETA_2          = 0.98
     EPSILON         = 1e-9
 
-    # training params
-    EPOCHS          = 2
-    STEPS_PER_EPOCH = 5
+    ## training params
+    EPOCHS          = 4
+    STEPS_PER_EPOCH = 2
+    # ===   === #
 
-    # aquire dataset pt - en
-    pt_en_dataset = DatasetHandler(
+
+    # === DATA HANDLING === #
+    dataset = DatasetHandler(
         dataset_name="ted_hrlr_translate/pt_to_en",
         model_name="ted_hrlr_translate_pt_en_converter",
         batch_size=BATCH_SIZE,
         buffer_size=BUFFER_SIZE
     )
-    pt_en_examples, pt_en_metadata = pt_en_dataset()
+    examples, metadata = dataset()
+    # ===   === #
 
-    pt_en_batch_config = DefaultBatchConfig(
-        first_lang=pt_en_dataset.tokenizer.pt,
-        sec_lang=pt_en_dataset.tokenizer.en,
-        max_tokens=MAX_TOKENS
-    )
 
-    if LOAD: # load model from file
-        # TODO
-        transformer = tf.saved_model.load(PATH_TO_MODEL)
+    # === TRANSFORMER === #
+    ## load
+        ### TODO
 
-    if not LOAD: # create model from scratch
-        # setup transformer
-        transformer = Transformer()
-
-        # setup encoder, decoder
-        pt_encoder = Encoder(
-            num_layers=NUM_LAYERS,
-            d_model=D_MODEL,
-            num_heads=NUM_HEADS,
-            dff=DFF,
-            dropout_rate=DROPOUT_RATE
-        )
-        en_decoder = Decoder(
+    ## not load
+    if not LOAD:
+        ## transformer
+        transformer = Transformer(
             num_layers=NUM_LAYERS,
             d_model=D_MODEL,
             num_heads=NUM_HEADS,
@@ -250,90 +248,106 @@ def main():
             dropout_rate=DROPOUT_RATE
         )
 
-        # config encoder, decoder
-        pt_encoder.set_pre_layer(
+        ## encoders
+        transformer.add_encoder(
+            name="pt_decoder",
             pre_layer=PositionalEmbedding(
-                vocab_size=pt_en_dataset.tokenizer.pt.get_vocab_size().numpy(),
+                vocab_size=dataset.tokenizer.pt.get_vocab_size().numpy(),
                 d_model=D_MODEL
             )
         )
-        en_decoder.set_pre_layer(
+
+        ## decoders
+        transformer.add_decoder(
+            name="en_decoder",
             pre_layer=PositionalEmbedding(
-                vocab_size=pt_en_dataset.tokenizer.en.get_vocab_size().numpy(),
+                vocab_size=dataset.tokenizer.en.get_vocab_size().numpy(),
                 d_model=D_MODEL
-            )
-        )
-        en_decoder.set_post_layer(
-            post_layer=tf.keras.layers.Dense(
-                pt_en_dataset.tokenizer.en.get_vocab_size().numpy()
-            )
-        )
-
-        # config transformer
-        transformer.set_encoder(encoder=pt_encoder)
-        transformer.set_decoder(decoder=en_decoder)
-
-    # prints model information
-    transformer.info(pt_en_dataset.make_batches(
-        dataset=pt_en_examples['train'],
-        batch_config=pt_en_batch_config
-    ).take(1))
-
-    if TRAIN: # train model from supplied dataset
-        # setup training params
-        pt_en_tranining_examples = pt_en_dataset.make_batches(
-            dataset=pt_en_examples['train'],
-            batch_config=pt_en_batch_config
-        )
-        pt_en_validation_examples = pt_en_dataset.make_batches(
-            dataset=pt_en_examples['validation'],
-            batch_config=pt_en_batch_config
-        )
-
-        optimizer = tf.keras.optimizers.Adam(
-            DefaultSchedule(
-                d_model=D_MODEL,
-                warmup_steps=WARMUP_STEPS
             ),
-            beta_1=BETA_1,
-            beta_2=BETA_2,
-            epsilon=EPSILON
+            post_layer=tf.keras.layers.Dense(
+                units=dataset.tokenizer.en.get_vocab_size().numpy()
+            )
+        )
+    # ===   === #
+
+
+    # === TRAINING SCHEDULE - TRAIN === #
+    if TRAIN:
+        ## batch configurator
+        batch_config = DefaultBatchConfig(
+            first_lang=dataset.tokenizer.pt,
+            sec_lang=dataset.tokenizer.en,
+            max_tokens=MAX_TOKENS
         )
 
-        callbacks = tf.keras.callbacks.CallbackList()
-        callbacks.append(DefaultCallback(transformer))
+        ## training schedule
+        training_schedule = [
+            TrainingScheduleElement(
+                encoder_id=0, decoder_id=0,
 
-        # train
+                training_data=dataset.make_batches(
+                    dataset=examples['train'],
+                    batch_config=batch_config
+                ),
+                validation_data=dataset.make_batches(
+                    dataset=examples['validation'],
+                    batch_config=batch_config
+                ),
+
+                epochs=EPOCHS,
+                steps_per_epoch=STEPS_PER_EPOCH,
+                callbacks=tf.keras.callbacks.CallbackList(
+                    callbacks=[
+                        DefaultCallback(
+                            model=transformer,
+                            path="__models__/__translator_v1__",
+                            timestamp=int(time.time())
+                        )
+                    ]
+                )
+            )
+        ]
+
+        ## transformer compile
         transformer.compile(
             loss=Loss.masked,
-            optimizer=optimizer,
+            optimizer=tf.keras.optimizers.Adam(
+                learning_rate=DefaultOptimizerSchedule(
+                    d_model=D_MODEL,
+                    warmup_steps=WARMUP_STEPS
+                ),
+                beta_1=BETA_1,
+                beta_2=BETA_2,
+                epsilon=EPSILON
+            ),
             metrics=[Accuarcy.masked]
         )
-        transformer.fit(
-            pt_en_tranining_examples,
-            epochs=EPOCHS,
-            steps_per_epoch=STEPS_PER_EPOCH,
-            validation_data=pt_en_validation_examples,
-            callbacks=callbacks
-        )
 
-    # translator
-    pt_en_translate = Translator(
-        tokenizer=pt_en_dataset.tokenizer,
-        first_lang=pt_en_dataset.tokenizer.pt,
-        sec_lang=pt_en_dataset.tokenizer.en,
+        transformer.train(
+            training_schedule=training_schedule,
+            callbacks=None
+        )
+    # ===   === #
+
+
+    # === TRANSLATE === #
+    translate = Translator(
+        tokenizer=dataset.tokenizer,
+        first_lang=dataset.tokenizer.pt,
+        sec_lang=dataset.tokenizer.en,
 
         transformer=transformer
     )
 
-    sample_tranlation = pt_en_translate(
+    sample_tranlation = translate(
         sentence="este é um problema que temos que resolver.",
         max_tokens=MAX_TOKENS
-    ) # >>> "this is a problem we have to solve ."
+    ) ## >>> "this is a problem we have to solve ."
 
     print(sample_tranlation.text)
     print(sample_tranlation.tokens)
     print(sample_tranlation.weights)
+    # ===   === #
 
 if __name__ == "__main__":
     main()

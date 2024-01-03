@@ -7,10 +7,10 @@ This is of interest as one might be able to cut down on hard to aquire
 
 
 ## Table of Contents
-- [Table of Contents](https://github.com/clwalther/Any2Any-Transformer#Table-of-Contents)
-- [Disclaimer](https://github.com/clwalther/Any2Any-Transformer#Disclaimer)
-- [Abstract](https://github.com/clwalther/Any2Any-Transformer#Abstract)
-- [Ressources](https://github.com/clwalther/Any2Any-Transformer#Ressources)
+- [Table of Contents](#Table-of-Contents)
+- [Disclaimer](#Disclaimer)
+- [Abstract](#Abstract)
+- [Ressources](#Ressources)
 
 
 ## Disclaimer

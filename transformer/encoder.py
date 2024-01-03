@@ -4,14 +4,15 @@ from .attention import SelfAttention
 from .feedforward import FeedForward
 
 class Encoder(tf.keras.layers.Layer):
-    def __init__(self,*, num_layers, d_model, num_heads,
-                         dff, dropout_rate):
+    def __init__(self,*, layer_name, num_layers, d_model, num_heads,
+                    dff, dropout_rate, pre_layer):
         super().__init__()
-
-        self.d_model = d_model
-        self.num_layers = num_layers
-
-        self.dropout = tf.keras.layers.Dropout(dropout_rate)
+        # public
+        self.layer_name     = layer_name
+        self.d_model        = d_model
+        self.num_layers     = num_layers
+        self.dropout_rate   = dropout_rate
+        self.pre_layer      = pre_layer
 
         self.encoder_layers = [
             EncoderLayer(
@@ -20,17 +21,17 @@ class Encoder(tf.keras.layers.Layer):
                 dff=dff,
                 dropout_rate=dropout_rate
             )
-        for encoder_layer_index in range(num_layers)]
+        for _ in range(self.num_layers)]
 
-    def set_pre_layer(self, pre_layer):
-        self.pre_layer = pre_layer
+        # private
+        self.dropout = tf.keras.layers.Dropout(self.dropout_rate)
 
     def call(self, x):
         x = self.pre_layer(x)
         x = self.dropout(x)
 
-        for encoder_layer_index in range(self.num_layers):
-            x = self.encoder_layers[encoder_layer_index](x)
+        for i in range(self.num_layers):
+            x = self.encoder_layers[i](x)
 
         return x
 

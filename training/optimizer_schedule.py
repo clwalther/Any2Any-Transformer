@@ -1,9 +1,9 @@
 import tensorflow as tf
 
-class DefaultSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+class DefaultOptimizerSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(self, d_model, warmup_steps):
         super().__init__()
-
+        # public
         self.d_model = d_model
         self.d_model = tf.cast(self.d_model, tf.float32)
 
@@ -15,3 +15,9 @@ class DefaultSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         arg2 = step * (self.warmup_steps ** -1.5)
 
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+
+    def get_config(self):
+        return {
+            "d_model": self.d_model,
+            "warmup_steps": self.warmup_steps,
+        }

@@ -4,14 +4,16 @@ from .attention import SelfAttention, CrossAttention
 from .feedforward import FeedForward
 
 class Decoder(tf.keras.layers.Layer):
-    def __init__(self,*, num_layers, d_model, num_heads,
-                         dff, dropout_rate):
+    def __init__(self,*, layer_name, num_layers, d_model, num_heads,
+                    dff, dropout_rate, pre_layer, post_layer):
         super().__init__()
-
-        self.d_model = d_model
-        self.num_layers = num_layers
-
-        self.dropout = tf.keras.layers.Dropout(dropout_rate)
+        # public
+        self.layer_name     = layer_name
+        self.d_model        = d_model
+        self.num_layers     = num_layers
+        self.dropout_rate   = dropout_rate
+        self.pre_layer      = pre_layer
+        self.post_layer     = post_layer
 
         self.decoder_layers = [
             DecoderLayer(
@@ -22,11 +24,8 @@ class Decoder(tf.keras.layers.Layer):
             )
         for decoder_layer_index in range(self.num_layers)]
 
-    def set_pre_layer(self, pre_layer):
-        self.pre_layer = pre_layer
-
-    def set_post_layer(self, post_layer):
-        self.post_layer = post_layer
+        # private
+        self.dropout = tf.keras.layers.Dropout(dropout_rate)
 
     def call(self, x, y):
         x = self.pre_layer(x)
