@@ -3,41 +3,67 @@ import tensorflow as tf
 from .attention import SelfAttention
 from .feedforward import FeedForward
 
-class Encoder(tf.keras.layers.Layer):
-    def __init__(self,*, layer_name, num_layers, d_model, num_heads,
-                    dff, dropout_rate, pre_layer):
+@tf.keras.saving.register_keras_serializable()
+class Encoder(tf.keras.Model):
+    def __init__(self,*, encoder_name, num_layers, d_model, num_heads,
+                    dff, dropout_rate, entry_layer):
         super().__init__()
-        # public
-        self.layer_name     = layer_name
-        self.d_model        = d_model
-        self.num_layers     = num_layers
-        self.dropout_rate   = dropout_rate
-        self.pre_layer      = pre_layer
+        self.encoder_name = encoder_name
+        self.num_layers = num_layers
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.dff = dff
+        self.dropout_rate = dropout_rate
+
+        self.entry_layer = tf.keras.saving.deserialize_keras_object(entry_layer)
 
         self.encoder_layers = [
             EncoderLayer(
-                d_model=d_model,
-                num_heads=num_heads,
-                dff=dff,
-                dropout_rate=dropout_rate
+                d_model=self.d_model,
+                num_heads=self.num_heads,
+                dff=self.dff,
+                dropout_rate=self.dropout_rate
             )
         for _ in range(self.num_layers)]
 
-        # private
-        self.dropout = tf.keras.layers.Dropout(self.dropout_rate)
+        self.trainable = True
 
     def call(self, x):
-        x = self.pre_layer(x)
-        x = self.dropout(x)
+        x = self.entry_layer(x)
 
-        for i in range(self.num_layers):
-            x = self.encoder_layers[i](x)
+        for encoder_layer in self.encoder_layers:
+            x = encoder_layer(x)
 
         return x
 
+    def save(self, filepath, save_format=None):
+        tf.keras.models.save_model(
+            model=self,
+            filepath=filepath,
+            save_format=save_format
+        )
+
+    def get_config(self):
+        super().get_config()
+        return {
+            "encoder_name": self.encoder_name,
+            "num_layers": self.num_layers,
+            "d_model": self.d_model,
+            "num_heads": self.num_heads,
+            "dff": self.dff,
+            "dropout_rate": self.dropout_rate,
+            "entry_layer": self.entry_layer
+        }
+
+
+@tf.keras.saving.register_keras_serializable()
 class EncoderLayer(tf.keras.layers.Layer):
     def __init__(self,*, d_model, num_heads, dff, dropout_rate):
         super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.dff = dff
+        self.dropout_rate = dropout_rate
 
         self.self_attention = SelfAttention(
             num_heads=num_heads,
@@ -51,3 +77,12 @@ class EncoderLayer(tf.keras.layers.Layer):
         x = self.feedforward(x=x)
 
         return x
+
+    def get_config(self):
+        super().get_config()
+        return {
+            "d_model": self.d_model,
+            "num_heads": self.num_heads,
+            "dff": self.dff,
+            "dropout_rate": self.dropout_rate
+        }

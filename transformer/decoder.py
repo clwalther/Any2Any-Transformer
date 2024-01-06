@@ -3,53 +3,78 @@ import tensorflow as tf
 from .attention import SelfAttention, CrossAttention
 from .feedforward import FeedForward
 
-class Decoder(tf.keras.layers.Layer):
-    def __init__(self,*, layer_name, num_layers, d_model, num_heads,
-                    dff, dropout_rate, pre_layer, post_layer):
+@tf.keras.saving.register_keras_serializable()
+class Decoder(tf.keras.Model):
+    def __init__(self,*, decoder_name, num_layers, d_model, num_heads,
+                    dff, dropout_rate, entry_layer, exit_layer):
         super().__init__()
-        # public
-        self.layer_name     = layer_name
-        self.d_model        = d_model
-        self.num_layers     = num_layers
-        self.dropout_rate   = dropout_rate
-        self.pre_layer      = pre_layer
-        self.post_layer     = post_layer
+        self.decoder_name = decoder_name
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.num_heads = num_heads
+        self.dff = dff
+        self.dropout_rate = dropout_rate
+
+        self.entry_layer = tf.keras.saving.deserialize_keras_object(entry_layer)
+        self.exit_layer = tf.keras.saving.deserialize_keras_object(exit_layer)
 
         self.decoder_layers = [
             DecoderLayer(
-                d_model=d_model,
-                num_heads=num_heads,
-                dff=dff,
-                dropout_rate=dropout_rate
+                d_model=self.d_model,
+                num_heads=self.num_heads,
+                dff=self.dff,
+                dropout_rate=self.dropout_rate
             )
-        for decoder_layer_index in range(self.num_layers)]
+        for _ in range(self.num_layers)]
 
-        # private
-        self.dropout = tf.keras.layers.Dropout(dropout_rate)
+        self.trainable = True
 
-    def call(self, x, y):
-        x = self.pre_layer(x)
-        x = self.dropout(x)
+    def call(self, inputs):
+        y, x = inputs
 
-        for decoder_layer_index in range(self.num_layers):
-            x = self.decoder_layers[decoder_layer_index](x, y)
+        x = self.entry_layer(x)
 
-        # final linear layer output
-        x = self.post_layer(x)
+        for decoder_layer in self.decoder_layers:
+            x = decoder_layer((y, x))
+
+        x = self.exit_layer(x)
 
         try:
-            # Drop the keras mask, so it doesn't scale the losses/metrics.
-            # b/250038731
             del x._keras_mask
         except AttributeError:
             pass
 
-        # Return the final output and the attention weights.
         return x
 
+    def save(self, filepath, save_format=None):
+        tf.keras.models.save_model(
+            model=self,
+            filepath=filepath,
+            save_format=save_format
+        )
+
+    def get_config(self):
+        super().get_config()
+        return {
+            "decoder_name": self.decoder_name,
+            "num_layers": self.num_layers,
+            "d_model": self.d_model,
+            "num_heads": self.num_heads,
+            "dff": self.dff,
+            "dropout_rate": self.dropout_rate,
+            "entry_layer": self.entry_layer,
+            "exit_layer": self.exit_layer
+        }
+
+
+@tf.keras.saving.register_keras_serializable()
 class DecoderLayer(tf.keras.layers.Layer):
     def __init__(self,*, d_model, num_heads, dff, dropout_rate):
         super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.dff = dff
+        self.dropout_rate = dropout_rate
 
         self.self_attention = SelfAttention(
             casual_mask=True,
@@ -64,9 +89,20 @@ class DecoderLayer(tf.keras.layers.Layer):
         )
         self.feedforward = FeedForward(d_model, dff, dropout_rate)
 
-    def call(self, x, y):
+    def call(self, inputs):
+        y, x = inputs
+
         x = self.self_attention(x=x)
         x = self.cross_attention(x=x, y=y)
         x = self.feedforward(x=x)
 
         return x
+
+    def get_config(self):
+        super().get_config()
+        return {
+            "d_model": self.d_model,
+            "num_heads": self.num_heads,
+            "dff": self.dff,
+            "dropout_rate": self.dropout_rate
+        }
