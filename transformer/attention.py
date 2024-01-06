@@ -1,5 +1,6 @@
 import tensorflow as tf
 
+@tf.keras.saving.register_keras_serializable()
 class BaseAttention(tf.keras.layers.Layer):
     def __init__(self, casual_mask=False, **kwargs):
         super().__init__()
@@ -13,6 +14,14 @@ class BaseAttention(tf.keras.layers.Layer):
         self.normalization = tf.keras.layers.LayerNormalization()
         self.addition = tf.keras.layers.Add()
 
+    def get_config(self):
+        super().get_config()
+        return {
+            "casual_mask": self.casual_mask
+        }
+
+
+@tf.keras.saving.register_keras_serializable()
 class SelfAttention(BaseAttention):
     def call(self, x):
         output = self.mulit_head_attention(
@@ -27,6 +36,7 @@ class SelfAttention(BaseAttention):
 
         return x
 
+@tf.keras.saving.register_keras_serializable()
 class CrossAttention(BaseAttention):
     def call(self, x, y):
         output, scores = self.mulit_head_attention(

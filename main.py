@@ -60,32 +60,34 @@ from training.__init__ import *
 
 
 # === PRE LAYERS (for TRANSLATOR v1) === #
+@tf.keras.saving.register_keras_serializable()
 class PositionalEmbedding(tf.keras.layers.Layer):
     def __init__(self, vocab_size, d_model):
         super().__init__()
+        self.length = 2048
+
+        self.vocab_size = vocab_size
         self.d_model = d_model
 
         self.embedding = tf.keras.layers.Embedding(
-            vocab_size,
-            d_model,
+            self.vocab_size,
+            self.d_model,
             mask_zero=True
         )
-        self.pos_encoding = self.positional_encoding(length=2048)
-
-    def compute_mask(self, *args, **kwargs):
-        return self.embedding.compute_mask(*args, **kwargs)
+        self.pos_encoding = self.positional_encoding()
 
     def call(self, x):
         x = self.embedding(x)
+
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         x += self.pos_encoding[tf.newaxis, :tf.shape(x)[1], :]
 
         return x
 
-    def positional_encoding(self, length):
+    def positional_encoding(self):
         depth = self.d_model / 2
         depths = np.arange(depth)[np.newaxis, :] / depth
-        angle_rads = np.arange(length)[:, np.newaxis] / (10000**depths)
+        angle_rads = np.arange(self.length)[:, np.newaxis] / (10000**depths)
 
         pos_encoding = np.concatenate(
             [np.sin(angle_rads), np.cos(angle_rads)],
@@ -93,105 +95,138 @@ class PositionalEmbedding(tf.keras.layers.Layer):
         )
 
         return tf.cast(pos_encoding, dtype=tf.float32)
+
+    def compute_mask(self, *args, **kwargs):
+        return self.embedding.compute_mask(*args, **kwargs)
+
+    def get_config(self):
+        super().get_config()
+        return {
+            "vocab_size": self.vocab_size,
+            "d_model": self.d_model
+        }
 # ===   === #
 
 
 # === BATCH CONFIGURATION (for TRANSLATOR v1) === #
 class DefaultBatchConfig():
-    def __init__(self, first_lang, sec_lang, max_tokens):
-        self.first_lang = first_lang
-        self.sec_lang = sec_lang
+    def __init__(self, max_tokens, p_lang_tokenizer, s_lang_tokenizer):
         self.max_tokens = max_tokens
 
-    def __call__(self, first_lang, sec_lang):
-        first_lang = self.first_lang.tokenize(first_lang)
-        first_lang = first_lang[:, :self.max_tokens]
-        first_lang = first_lang.to_tensor()
+        self.p_lang_tokenizer = p_lang_tokenizer # primary language tokenizer
+        self.s_lang_tokenizer = s_lang_tokenizer # secondary language tokenizer
 
-        sec_lang = self.sec_lang.tokenize(sec_lang)
-        sec_lang = sec_lang[:, :(self.max_tokens+1)]
-        sec_lang_sentences = sec_lang[:, :-1].to_tensor()
-        sec_lang_labels = sec_lang[:, 1:].to_tensor()
+    def __call__(self, p_lang, s_lang):
+        # tokenize the input
+        p_lang = self.p_lang_tokenizer.tokenize(p_lang)
+        s_lang = self.s_lang_tokenizer.tokenize(s_lang)
 
-        return (first_lang, sec_lang_sentences), sec_lang_labels
+        # only allow max number of tokens
+        p_lang = p_lang[:, :self.max_tokens]
+        s_lang = s_lang[:, :self.max_tokens +1] # +1 for end token
+
+        #
+        p_lang = p_lang.to_tensor()
+        s_lang_sentence = s_lang[:, :-1].to_tensor()
+
+        # label
+        s_lang_labels = s_lang[:, 1:].to_tensor()
+
+        return (p_lang, s_lang_sentence), s_lang_labels
 # ===   === #
 
 
 # === TRANSLATOR v1 === #
 class Translator():
-    def __init__(self, tokenizer, first_lang, sec_lang, transformer):
-        self.tokenizer = tokenizer
-        self.first_lang = first_lang
-        self.sec_lang = sec_lang
+    def __init__(self, max_tokens, p_lang_tokenizer, s_lang_tokenizer, tokenizer, transformer):
+        self.max_tokens = max_tokens
 
+        self.p_lang_tokenizer = p_lang_tokenizer
+        self.s_lang_tokenizer = s_lang_tokenizer
+
+        self.tokenizer = tokenizer
         self.transformer = transformer
 
-    def __call__(self, sentence, max_tokens):
+    def __call__(self, p_lang):
+        # init translation object
         translation = Translation(
+            max_tokens=self.max_tokens,
+
+            p_lang_tokenizer=self.p_lang_tokenizer,
+            s_lang_tokenizer=self.s_lang_tokenizer,
+
             tokenizer=self.tokenizer,
-            first_lang=self.first_lang,
-            sec_lang=self.sec_lang,
             transformer=self.transformer
         )
+
+        # translate the input
         translation(
-            sentence=tf.constant(sentence),
-            output_array=tf.TensorArray(dtype=tf.int64, size=0, dynamic_size=True),
-            max_tokens=max_tokens
+            p_lang=tf.constant(p_lang),
+            s_lang_array=tf.TensorArray(
+                dtype=tf.int64,
+                size=0,
+                dynamic_size=True
+            )
         )
 
         return translation
 
 class Translation():
-    def __init__(self, tokenizer, first_lang, sec_lang, transformer):
-        self.__tokenizer = tokenizer
-        self.__first_lang = first_lang
-        self.__sec_lang = sec_lang
+    def __init__(self, max_tokens, p_lang_tokenizer, s_lang_tokenizer, tokenizer, transformer):
+        self.max_tokens = max_tokens
 
-        self.__transformer = transformer
+        self.p_lang_tokenizer = p_lang_tokenizer
+        self.s_lang_tokenizer = s_lang_tokenizer
 
-    def __call__(self, sentence, output_array, max_tokens):
+        self.tokenizer = tokenizer
+        self.transformer = transformer
+
+    def __call__(self, p_lang, s_lang_array):
         # empty string handling
-        if len(sentence.shape) == 0: sentence = sentence[tf.newaxis]
+        if len(p_lang.shape) == 0: p_lang = p_lang[tf.newaxis]
 
-        # tokenize the sentence sentence
-        sentence = self.__first_lang.tokenize(sentence).to_tensor()
+        # tokenize
+        p_lang = self.p_lang_tokenizer.tokenize(p_lang).to_tensor()
 
-        # output start- and end-tokens
-        start_end_token = self.__sec_lang.tokenize([''])[0]
+        # output start and end token
+        s_lang_start_token = self.s_lang_tokenizer.tokenize([""])[0][0][tf.newaxis]
+        s_lang_end_token = self.s_lang_tokenizer.tokenize([""])[0][1][tf.newaxis]
 
-        start_token = start_end_token[0][tf.newaxis]
-        end_token = start_end_token[1][tf.newaxis]
+        # write start token to output array
+        s_lang_array = s_lang_array.write(0, s_lang_start_token)
 
-        # insert start token into output array
-        output_array = output_array.write(0, start_token)
+        # writing the rest of the output
+        for i in tf.range(self.max_tokens):
+            # transpose array to tensor
+            s_lang = tf.transpose(s_lang_array.stack())
 
-        # generating output
-        for token_index in range(max_tokens):
-            predictions = self.__transformer(
-                [sentence, tf.transpose(output_array.stack())],
+            # prediciton
+            s_lang_token_predictions = self.transformer(
+                [p_lang, s_lang],
                 training=False
             )
-            predicted_token = tf.argmax(
-                predictions[:, -1:, :],
+            s_lang_token_prediction = tf.argmax(
+                s_lang_token_predictions[:, -1:, :],
                 axis=-1
             )
 
-            # insert predicted token
-            output_array = output_array.write(token_index + 1, predicted_token[0])
+            # write predicted token to output array
+            s_lang_array = s_lang_array.write(i +1, s_lang_token_prediction[0])
 
-            # exit the loop -> end of output
-            if predicted_token == end_token: break
+            # exiting if end token is last token
+            if s_lang_token_prediction == s_lang_end_token:
+                break
 
-        output = tf.transpose(output_array.stack())
+        # transpose array to tensor
+        s_lang = tf.transpose(s_lang_array.stack())
 
-        # post processing
-        self.text = self.__tokenizer.en.detokenize(output)[0]
-        self.tokens = self.__tokenizer.en.lookup(output)[0]
+        # attention weights
+        self.transformer([p_lang, s_lang[:,:-1]], training=False)
 
-        # aquires attention weights
-        self.__transformer([sentence, output[:,:-1]], active_encoder=0, active_decoder=0, training=False)
-
-        self.weights = self.__transformer.decoders[0].decoder_layers[-1].cross_attention.last_scores
+        # attributes
+        self.text = self.s_lang_tokenizer.detokenize(s_lang)[0]
+        self.tokens = self.s_lang_tokenizer.lookup(s_lang)[0]
+        self.weights = self.transformer.decoder.decoder_layers[-1].cross_attention.last_scores
 # ===   === #
 
 
@@ -204,10 +239,10 @@ def main():
     BUFFER_SIZE     = 20000
 
     ## transformer hyperparams
-    NUM_LAYERS      = 4
-    D_MODEL         = 128
+    NUM_LAYERS      = 6
+    D_MODEL         = 512
     NUM_HEADS       = 8
-    DFF             = 512
+    DFF             = 2048
     DROPOUT_RATE    = 0.1
 
     ## optimizer
@@ -217,55 +252,84 @@ def main():
     EPSILON         = 1e-9
 
     ## training params
-    EPOCHS          = 4
-    STEPS_PER_EPOCH = 2
+    EPOCHS          = 80
+    STEPS_PER_EPOCH = 1200
     # ===   === #
 
 
     # === DATA HANDLING === #
+    # pt-en dataset
+    DATASET_NAME = "ted_hrlr_translate/pt_to_en"
+    MODEL_NAME = "ted_hrlr_translate_pt_en_converter"
+
     dataset = DatasetHandler(
-        dataset_name="ted_hrlr_translate/pt_to_en",
-        model_name="ted_hrlr_translate_pt_en_converter",
+        dataset_name=DATASET_NAME,
+        model_name=MODEL_NAME,
         batch_size=BATCH_SIZE,
         buffer_size=BUFFER_SIZE
     )
+
+    # calling dataset content
     examples, metadata = dataset()
     # ===   === #
 
 
     # === TRANSFORMER === #
+    transformer = Transformer()
+
     ## load
-        ### TODO
+    if LOAD:
+        # loading the encoder model from file
+        encoder = tf.keras.models.load_model(
+            filepath="__models__/pt-test-encoder.keras",
+            custom_objects={
+            }
+        )
+
+        # loading the decoder model from file
+        decoder = tf.keras.models.load_model(
+            filepath="__models__/en-test-decoder.keras",
+            custom_objects={
+            }
+        )
+
 
     ## not load
     if not LOAD:
-        ## transformer
-        transformer = Transformer(
+        # pt encoder
+        encoder = Encoder(
+            encoder_name="pt-encoder",
             num_layers=NUM_LAYERS,
             d_model=D_MODEL,
             num_heads=NUM_HEADS,
             dff=DFF,
-            dropout_rate=DROPOUT_RATE
-        )
-
-        ## encoders
-        transformer.add_encoder(
-            name="pt_decoder",
-            pre_layer=PositionalEmbedding(
-                vocab_size=dataset.tokenizer.pt.get_vocab_size().numpy(),
-                d_model=D_MODEL
+            dropout_rate=DROPOUT_RATE,
+            entry_layer=tf.keras.saving.serialize_keras_object(
+                PositionalEmbedding(
+                    vocab_size=dataset.tokenizer.pt.get_vocab_size().numpy(),
+                    d_model=D_MODEL
+                )
             )
         )
 
-        ## decoders
-        transformer.add_decoder(
-            name="en_decoder",
-            pre_layer=PositionalEmbedding(
-                vocab_size=dataset.tokenizer.en.get_vocab_size().numpy(),
-                d_model=D_MODEL
+        # en decoder
+        decoder = Decoder(
+            decoder_name="en-decoder",
+            num_layers=NUM_LAYERS,
+            d_model=D_MODEL,
+            num_heads=NUM_HEADS,
+            dff=DFF,
+            dropout_rate=DROPOUT_RATE,
+            entry_layer=tf.keras.saving.serialize_keras_object(
+                PositionalEmbedding(
+                    vocab_size=dataset.tokenizer.en.get_vocab_size().numpy(),
+                    d_model=D_MODEL
+                )
             ),
-            post_layer=tf.keras.layers.Dense(
-                units=dataset.tokenizer.en.get_vocab_size().numpy()
+            exit_layer=tf.keras.saving.serialize_keras_object(
+                tf.keras.layers.Dense(
+                    dataset.tokenizer.en.get_vocab_size().numpy()
+                )
             )
         )
     # ===   === #
@@ -273,17 +337,18 @@ def main():
 
     # === TRAINING SCHEDULE - TRAIN === #
     if TRAIN:
-        ## batch configurator
+        # init defaut batch configurator
         batch_config = DefaultBatchConfig(
-            first_lang=dataset.tokenizer.pt,
-            sec_lang=dataset.tokenizer.en,
-            max_tokens=MAX_TOKENS
+            max_tokens=MAX_TOKENS,
+
+            p_lang_tokenizer=dataset.tokenizer.pt,
+            s_lang_tokenizer=dataset.tokenizer.en
         )
 
-        ## training schedule
-        training_schedule = [
+        # trainging schedule
+        trainging_schedule = [
             TrainingScheduleElement(
-                encoder_id=0, decoder_id=0,
+                encoder=encoder, decoder=decoder,
 
                 training_data=dataset.make_batches(
                     dataset=examples['train'],
@@ -296,19 +361,11 @@ def main():
 
                 epochs=EPOCHS,
                 steps_per_epoch=STEPS_PER_EPOCH,
-                callbacks=tf.keras.callbacks.CallbackList(
-                    callbacks=[
-                        DefaultCallback(
-                            model=transformer,
-                            path="__models__/__translator_v1__",
-                            timestamp=int(time.time())
-                        )
-                    ]
-                )
+                callbacks=[   ]
             )
         ]
 
-        ## transformer compile
+        # compiling for trainging
         transformer.compile(
             loss=Loss.masked,
             optimizer=tf.keras.optimizers.Adam(
@@ -324,29 +381,9 @@ def main():
         )
 
         transformer.train(
-            training_schedule=training_schedule,
-            callbacks=None
+            training_schedule=trainging_schedule,
+            callbacks=[   ]
         )
-    # ===   === #
-
-
-    # === TRANSLATE === #
-    translate = Translator(
-        tokenizer=dataset.tokenizer,
-        first_lang=dataset.tokenizer.pt,
-        sec_lang=dataset.tokenizer.en,
-
-        transformer=transformer
-    )
-
-    sample_tranlation = translate(
-        sentence="este é um problema que temos que resolver.",
-        max_tokens=MAX_TOKENS
-    ) ## >>> "this is a problem we have to solve ."
-
-    print(sample_tranlation.text)
-    print(sample_tranlation.tokens)
-    print(sample_tranlation.weights)
     # ===   === #
 
 if __name__ == "__main__":
